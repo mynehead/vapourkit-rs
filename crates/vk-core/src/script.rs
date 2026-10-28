@@ -28,6 +28,14 @@ impl Backend {
         }
     }
 
+    pub fn short(self) -> &'static str {
+        match self {
+            Backend::TensorRt => "TRT",
+            Backend::DirectMl => "DML",
+            Backend::Ncnn => "NCNN",
+        }
+    }
+
     fn id(self) -> &'static str {
         match self {
             Backend::TensorRt => "tensorrt",
@@ -117,12 +125,27 @@ fn filters_code(cfg: &ScriptConfig) -> String {
     code
 }
 
+/// The template's source line, and what replaces it: BestSource when it is
+/// installed, else L-SMASH or FFMS2.
+const BS_SOURCE: &str = "clip = core.bs.VideoSource(source=source_path, cachemode=3, timecodes=source_timecodes)";
+// Without BestSource no timecodes file is written, so vk_timed_output keeps a constant rate.
+const ANY_SOURCE: &str = "\
+if hasattr(core, \"bs\"):
+    clip = core.bs.VideoSource(source=source_path, cachemode=3, timecodes=source_timecodes)
+elif hasattr(core, \"lsmas\"):
+    clip = core.lsmas.LWLibavSource(source_path)
+elif hasattr(core, \"ffms2\"):
+    clip = core.ffms2.Source(source_path)
+else:
+    raise vs.Error(\"No attribute with the name bs exists: no source filter (BestSource, L-SMASH or FFMS2) is installed\")";
+
 /// The script text for `script_path`; vk_runtime.py is expected in its folder,
 /// and the template's timecodes file is written beside it.
 pub fn render(cfg: &ScriptConfig, script_path: &Path) -> String {
     let work_dir = script_path.parent().unwrap_or(Path::new("."));
     let timecodes = script_path.with_extension("timecodes.txt");
     TEMPLATE
+        .replace(BS_SOURCE, ANY_SOURCE)
         .replace("{{INPUT_VIDEO}}", &template_path(&cfg.input))
         .replace("{{SOURCE_TIMECODES}}", &template_path(&timecodes))
         .replace("{{OVERWRITE_MATRIX}}", "False")
@@ -159,5 +182,6 @@ mod tests {
         assert!(s.contains("format=vs.RGBH"));
         assert!(!s.contains("core.cas.CAS"), "disabled step was rendered");
         assert!(s.contains("left   = 0\n"));
+        assert!(s.contains("core.lsmas.LWLibavSource(source_path)"), "source fallback missing");
     }
 }
