@@ -18,9 +18,10 @@ pub struct Tools {
 }
 
 impl Default for Tools {
-    /// Both from PATH until first-run setup (milestone 3) installs its own.
+    /// vspipe from setup once it has run, otherwise all from PATH.
     fn default() -> Self {
-        Tools { vspipe: "vspipe".into(), ffmpeg: "ffmpeg".into(), ffprobe: "ffprobe".into() }
+        let vspipe = crate::setup::installed_vspipe().unwrap_or_else(|| "vspipe".into());
+        Tools { vspipe, ffmpeg: "ffmpeg".into(), ffprobe: "ffprobe".into() }
     }
 }
 
@@ -71,24 +72,27 @@ fn parse_frames(info: &str) -> Option<u64> {
         .and_then(|n| n.trim().parse().ok())
 }
 
-/// What to install for a plugin namespace VapourSynth reported missing.
+/// What is missing for a plugin namespace VapourSynth reported.
 fn plugin_hint(namespace: &str) -> Option<&'static str> {
     Some(match namespace {
-        "bs" => "the BestSource plugin, which reads the video (vsrepo install bestsource, or put BestSource.dll in the VapourSynth plugins folder)",
-        "trt" => "vs-mlrt's TensorRT plugin (vsrepo install trt), or pick another backend",
-        "ort" => "vs-mlrt's ONNX Runtime plugin for DirectML (vsrepo install ort), or pick another backend",
-        "ncnn" => "vs-mlrt's NCNN plugin (vsrepo install ncnn), or pick another backend",
+        "bs" => "the BestSource plugin, which reads the video",
+        "trt" => "vs-mlrt's TensorRT plugin",
+        "ort" => "vs-mlrt's ONNX Runtime plugin, which DirectML needs",
+        "ncnn" => "vs-mlrt's NCNN plugin",
         _ => return None,
     })
 }
+
+/// How a failure caused by a missing known plugin starts, so the UI can offer setup.
+pub const MISSING_PLUGIN: &str = "VapourSynth is missing";
 
 /// A plain message for a script that failed because a plugin is missing.
 fn explain_failure(info: &str) -> Option<String> {
     let rest = info.split("No attribute with the name ").nth(1)?;
     let namespace = rest.split_whitespace().next()?;
     Some(match plugin_hint(namespace) {
-        Some(hint) => format!("VapourSynth is missing a plugin: install {hint}."),
-        None => format!("VapourSynth is missing the plugin with namespace \"{namespace}\", which a filter step uses. Install it or remove that step."),
+        Some(hint) => format!("{MISSING_PLUGIN} {hint}. Setup installs it for the chosen backend."),
+        None => format!("VapourSynth has no plugin with namespace \"{namespace}\", which a filter step uses. Install it or remove that step."),
     })
 }
 
@@ -239,6 +243,7 @@ mod tests {
     fn explains_missing_plugins() {
         let err = "AttributeError: No attribute with the name bs exists. Did you mistype a plugin namespace";
         assert!(explain_failure(err).unwrap().contains("BestSource"));
+        assert!(explain_failure("No attribute with the name ort exists.").unwrap().starts_with(MISSING_PLUGIN));
         assert!(explain_failure("No attribute with the name cas exists.").unwrap().contains("\"cas\""));
         assert_eq!(explain_failure("SyntaxError: invalid syntax"), None);
     }
