@@ -4,5 +4,6 @@
 pub mod chain;
 pub mod encoding;
 pub mod job;
+pub mod probe;
 pub mod script;
 pub mod workflow;

@@ -24,6 +24,7 @@ fn main() {
         match ev {
             Event::Log(l) => eprintln!("{l}"),
             Event::Progress { frame, total } => eprintln!("frame {frame}/{total}"),
+            Event::Preview(jpeg) => eprintln!("preview frame, {} bytes", jpeg.len()),
             Event::Done(r) => {
                 if let Err(e) = r { eprintln!("{e}"); std::process::exit(1); }
                 return;

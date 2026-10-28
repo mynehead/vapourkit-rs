@@ -13,3 +13,4 @@ vk-core = { path = "../vk-core" }
 eframe = { version = "0.31", features = ["persistence"] }
 serde = { version = "1", features = ["derive"] }
 rfd = "0.15"
+image = { version = "0.25", default-features = false, features = ["jpeg"] }

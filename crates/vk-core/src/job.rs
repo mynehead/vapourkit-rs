@@ -14,12 +14,13 @@ use crate::script;
 pub struct Tools {
     pub vspipe: PathBuf,
     pub ffmpeg: PathBuf,
+    pub ffprobe: PathBuf,
 }
 
 impl Default for Tools {
     /// Both from PATH until first-run setup (milestone 3) installs its own.
     fn default() -> Self {
-        Tools { vspipe: "vspipe".into(), ffmpeg: "ffmpeg".into() }
+        Tools { vspipe: "vspipe".into(), ffmpeg: "ffmpeg".into(), ffprobe: "ffprobe".into() }
     }
 }
 
@@ -27,6 +28,8 @@ impl Default for Tools {
 pub enum Event {
     Log(String),
     Progress { frame: u64, total: u64 },
+    /// A JPEG of the output, about once a second.
+    Preview(Vec<u8>),
     Done(Result<(), String>),
 }
 
@@ -68,11 +71,33 @@ fn parse_frames(info: &str) -> Option<u64> {
         .and_then(|n| n.trim().parse().ok())
 }
 
+/// What to install for a plugin namespace VapourSynth reported missing.
+fn plugin_hint(namespace: &str) -> Option<&'static str> {
+    Some(match namespace {
+        "bs" => "the BestSource plugin, which reads the video (vsrepo install bestsource, or put BestSource.dll in the VapourSynth plugins folder)",
+        "trt" => "vs-mlrt's TensorRT plugin (vsrepo install trt), or pick another backend",
+        "ort" => "vs-mlrt's ONNX Runtime plugin for DirectML (vsrepo install ort), or pick another backend",
+        "ncnn" => "vs-mlrt's NCNN plugin (vsrepo install ncnn), or pick another backend",
+        _ => return None,
+    })
+}
+
+/// A plain message for a script that failed because a plugin is missing.
+fn explain_failure(info: &str) -> Option<String> {
+    let rest = info.split("No attribute with the name ").nth(1)?;
+    let namespace = rest.split_whitespace().next()?;
+    Some(match plugin_hint(namespace) {
+        Some(hint) => format!("VapourSynth is missing a plugin: install {hint}."),
+        None => format!("VapourSynth is missing the plugin with namespace \"{namespace}\", which a filter step uses. Install it or remove that step."),
+    })
+}
+
 /// ffmpeg's arguments: the Matroska stream from vspipe tagged BT.709 limited,
-/// audio and subtitles copied from the source, progress on stdout.
+/// audio and subtitles copied from the source, progress on stderr and a
+/// 1 fps MJPEG preview on stdout, as upstream does.
 fn ffmpeg_args(input: &Path, video_args: &[String], output: &Path) -> Vec<String> {
     let mut a: Vec<String> = [
-        "-hide_banner", "-loglevel", "error", "-nostats", "-progress", "pipe:1",
+        "-hide_banner", "-loglevel", "error", "-nostats", "-progress", "pipe:2",
         "-f", "matroska", "-color_range", "tv", "-colorspace", "bt709",
         "-color_primaries", "bt709", "-color_trc", "bt709", "-i", "pipe:0",
     ]
@@ -88,7 +113,27 @@ fn ffmpeg_args(input: &Path, video_args: &[String], output: &Path) -> Vec<String
         a.push(s.into());
     }
     a.push(output.to_string_lossy().into_owned());
+    for s in ["-map", "0:v:0", "-vf", "fps=1,scale=-2:'min(720,ih)'", "-f", "image2pipe", "-c:v", "mjpeg", "-q:v", "2", "pipe:1"] {
+        a.push(s.into());
+    }
     a
+}
+
+/// Takes the complete JPEGs (SOI 0xFFD8 to EOI 0xFFD9) off the front of `buf`.
+fn take_jpegs(buf: &mut Vec<u8>) -> Vec<Vec<u8>> {
+    let mut out = Vec::new();
+    loop {
+        let Some(start) = buf.windows(2).position(|w| w == [0xFF, 0xD8]) else { break };
+        let Some(len) = buf[start..].windows(2).position(|w| w == [0xFF, 0xD9]) else { break };
+        out.push(buf[start..start + len + 2].to_vec());
+        buf.drain(..start + len + 2);
+    }
+    out
+}
+
+/// A line of ffmpeg's `-progress` output (`key=value`, lowercase key).
+fn is_progress_line(line: &str) -> bool {
+    line.split_once('=').is_some_and(|(k, _)| !k.is_empty() && k.bytes().all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'_'))
 }
 
 fn forward_lines(r: impl Read + Send + 'static, tx: Sender<Event>, tag: &'static str) {
@@ -122,7 +167,10 @@ fn run(
         .map_err(|e| format!("Cannot run {}: {e}", tools.vspipe.display()))?;
     let info_text = format!("{}{}", String::from_utf8_lossy(&info.stdout), String::from_utf8_lossy(&info.stderr));
     if !info.status.success() {
-        return Err(format!("vspipe could not evaluate the script:\n{info_text}"));
+        return Err(match explain_failure(&info_text) {
+            Some(plain) => format!("{plain}\n\n{info_text}"),
+            None => format!("vspipe could not evaluate the script:\n{info_text}"),
+        });
     }
     let total = parse_frames(&info_text).unwrap_or(0);
     let _ = tx.send(Event::Log(format!("Frames: {total}")));
@@ -148,15 +196,32 @@ fn run(
             return Err(format!("Cannot run {}: {e}", tools.ffmpeg.display()));
         }
     };
-    let progress = ffmpeg.stdout.take().expect("piped");
-    forward_lines(ffmpeg.stderr.take().expect("piped"), tx.clone(), "ffmpeg");
+    let mut preview = ffmpeg.stdout.take().expect("piped");
+    let stderr = ffmpeg.stderr.take().expect("piped");
     children.lock().unwrap().extend([vspipe, ffmpeg]);
 
-    for line in BufReader::new(progress).lines().map_while(Result::ok) {
-        if let Some(frame) = line.strip_prefix("frame=").and_then(|n| n.trim().parse().ok()) {
-            let _ = tx.send(Event::Progress { frame, total });
+    let progress_tx = tx.clone();
+    let progress = thread::spawn(move || {
+        for line in BufReader::new(stderr).lines().map_while(Result::ok) {
+            if let Some(frame) = line.strip_prefix("frame=").and_then(|n| n.trim().parse().ok()) {
+                let _ = progress_tx.send(Event::Progress { frame, total });
+            } else if !is_progress_line(&line) {
+                let _ = progress_tx.send(Event::Log(format!("[ffmpeg] {line}")));
+            }
+        }
+    });
+    let mut buf = Vec::new();
+    let mut chunk = [0u8; 64 * 1024];
+    while let Ok(n) = preview.read(&mut chunk) {
+        if n == 0 {
+            break;
+        }
+        buf.extend_from_slice(&chunk[..n]);
+        for jpeg in take_jpegs(&mut buf) {
+            let _ = tx.send(Event::Preview(jpeg));
         }
     }
+    let _ = progress.join();
 
     let mut ok = true;
     for child in children.lock().unwrap().iter_mut() {
@@ -169,6 +234,32 @@ fn run(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn explains_missing_plugins() {
+        let err = "AttributeError: No attribute with the name bs exists. Did you mistype a plugin namespace";
+        assert!(explain_failure(err).unwrap().contains("BestSource"));
+        assert!(explain_failure("No attribute with the name cas exists.").unwrap().contains("\"cas\""));
+        assert_eq!(explain_failure("SyntaxError: invalid syntax"), None);
+    }
+
+    #[test]
+    fn splits_jpegs() {
+        let mut buf = vec![0xFF, 0xD8, 1, 2, 0xFF, 0xD9, 0xFF, 0xD8, 3];
+        assert_eq!(take_jpegs(&mut buf), [vec![0xFF, 0xD8, 1, 2, 0xFF, 0xD9]]);
+        assert_eq!(buf, [0xFF, 0xD8, 3]);
+        buf.extend([0xFF, 0xD9]);
+        assert_eq!(take_jpegs(&mut buf).len(), 1);
+        assert!(buf.is_empty());
+    }
+
+    #[test]
+    fn tells_progress_from_log_lines() {
+        assert!(is_progress_line("out_time_us=1000"));
+        assert!(is_progress_line("progress=continue"));
+        assert!(!is_progress_line("x265 [info]: frame I: 1, Avg QP=19"));
+        assert!(!is_progress_line("Error opening output file"));
+    }
 
     #[test]
     fn reads_frame_count() {
@@ -184,6 +275,7 @@ mod tests {
         let second = a.iter().position(|s| s == "in.mkv").unwrap();
         let codec = a.iter().position(|s| s == "libx265").unwrap();
         assert!(first < second && second < codec);
-        assert_eq!(a.last().unwrap(), "out.mp4");
+        let out = a.iter().position(|s| s == "out.mp4").unwrap();
+        assert!(codec < out && a.last().unwrap() == "pipe:1");
     }
 }
