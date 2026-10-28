@@ -4,7 +4,8 @@
 use std::sync::mpsc::channel;
 use vk_core::encoding::Encoding;
 use vk_core::job::{self, Event, Tools};
-use vk_core::script::{Backend, ScriptConfig};
+use vk_core::chain::Step;
+use vk_core::script::{self, Backend, ScriptConfig};
 
 fn main() {
     let a: Vec<String> = std::env::args().skip(1).collect();
@@ -15,9 +16,10 @@ fn main() {
     let mut tools = Tools::default();
     if let Ok(p) = std::env::var("VK_VSPIPE") { tools.vspipe = p.into(); }
     if let Ok(p) = std::env::var("VK_FFMPEG") { tools.ffmpeg = p.into(); }
-    let cfg = ScriptConfig { input: input.into(), model: model.into(), backend: Backend::Ncnn, fp16: true, num_streams: 2 };
+    let cfg = ScriptConfig { input: input.into(), steps: vec![Step::model(model.into())], backend: Backend::Ncnn, num_streams: 2 };
+    let text = script::render(&cfg, &job::script_path());
     let (tx, rx) = channel();
-    let _job = job::start(tools, cfg, Encoding::default().args(), output.into(), tx);
+    let _job = job::start(tools, text, input.into(), Encoding::default().args(), output.into(), tx);
     for ev in rx {
         match ev {
             Event::Log(l) => eprintln!("{l}"),

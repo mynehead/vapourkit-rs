@@ -3,6 +3,8 @@
 
 use std::path::{Path, PathBuf};
 
+use crate::chain::{self, Step, StepKind};
+
 pub const TEMPLATE: &str = include_str!("../../../assets/vapoursynth_template.vpy");
 /// The helpers every script imports; written beside the script for each run.
 pub const RUNTIME_PY: &str = include_str!("../../../assets/vk_runtime.py");
@@ -52,10 +54,9 @@ impl Backend {
 #[derive(Clone, Debug)]
 pub struct ScriptConfig {
     pub input: PathBuf,
-    pub model: PathBuf,
+    /// Run in order; disabled steps are skipped.
+    pub steps: Vec<Step>,
     pub backend: Backend,
-    /// fp16 models take RGBH, fp32 models RGBS.
-    pub fp16: bool,
     pub num_streams: u32,
 }
 
@@ -73,7 +74,11 @@ fn template_path(p: &Path) -> String {
 fn backend_helper(cfg: &ScriptConfig, work_dir: &Path) -> String {
     let attrs = "\"tensorrt\": \"TRT\", \"directml\": \"ORT_DML\", \"ncnn\": \"NCNN_VK\", \"migraphx\": \"MIGX\"";
     let dir = py_path(work_dir);
-    let models = py_path(cfg.model.parent().unwrap_or(work_dir));
+    let first_model = cfg.steps.iter().find_map(|s| match &s.kind {
+        StepKind::Model { path, .. } => path.parent(),
+        _ => None,
+    });
+    let models = py_path(first_model.unwrap_or(work_dir));
     format!(
         "VK_BACKEND = \"{id}\"\n\
          VK_BUILD_ENV = {{}}\n\
@@ -86,16 +91,30 @@ fn backend_helper(cfg: &ScriptConfig, work_dir: &Path) -> String {
     )
 }
 
-fn model_code(cfg: &ScriptConfig) -> String {
-    let rgb = if cfg.fp16 { "vs.RGBH" } else { "vs.RGBS" };
+fn model_code(cfg: &ScriptConfig, model: &Path, fp16: bool) -> String {
+    let rgb = if fp16 { "vs.RGBH" } else { "vs.RGBS" };
     format!(
-        "# AI Model\n\
+        "\
          if clip.format.id != {rgb}:\n    clip = core.resize.Bilinear(clip, format={rgb}, matrix_in_s=\"709\", primaries_in_s=\"709\", transfer_in_s=\"709\")\n\
          clip = core.std.Expr(clip, expr=['x 0 max 1 min'])\n\
          {call}\
          clip = core.resize.Point(clip, format=vs.YUV444P16, matrix_s=\"709\", primaries_s=\"709\", transfer_s=\"709\")\n",
-        call = cfg.backend.model_call(&py_path(&cfg.model), cfg.fp16, cfg.num_streams),
+        call = cfg.backend.model_call(&py_path(model), fp16, cfg.num_streams),
     )
+}
+
+fn filters_code(cfg: &ScriptConfig) -> String {
+    let mut code = String::new();
+    for step in cfg.steps.iter().filter(|s| s.enabled) {
+        // One line, so a name cannot end the comment early.
+        code += &format!("# {}\n", step.name.replace(['\r', '\n'], " "));
+        code += &match &step.kind {
+            StepKind::Model { path, fp16 } => model_code(cfg, path, *fp16),
+            StepKind::Custom { code, variables, parameters } => chain::render_custom(code, variables, parameters) + "\n",
+        };
+        code += "\n";
+    }
+    code
 }
 
 /// The script text for `script_path`; vk_runtime.py is expected in its folder,
@@ -113,7 +132,7 @@ pub fn render(cfg: &ScriptConfig, script_path: &Path) -> String {
         .replace("{{DEFAULT_TRANSFER}}", "709")
         .replace("{{OUTPUT_FORMAT}}", "vs.YUV420P8")
         .replace("{{BACKEND_HELPER}}", &backend_helper(cfg, work_dir))
-        .replace("{{FILTERS}}", &model_code(cfg))
+        .replace("{{FILTERS}}", &filters_code(cfg))
 }
 
 #[cfg(test)]
@@ -124,9 +143,12 @@ mod tests {
     fn renders_every_placeholder() {
         let cfg = ScriptConfig {
             input: r"C:\vids\in put.mkv".into(),
-            model: "/models/2x_x_fp16.onnx".into(),
+            steps: vec![
+                Step::model("/models/2x_x_fp16.onnx".into()),
+                Step { enabled: false, ..chain::bundled_filters().into_iter().find(|t| t.name == "CAS Sharpen").unwrap().to_step() },
+                chain::bundled_filters().into_iter().find(|t| t.name == "Crop").unwrap().to_step(),
+            ],
             backend: Backend::Ncnn,
-            fp16: true,
             num_streams: 2,
         };
         let s = render(&cfg, Path::new("/tmp/vk/run.vpy"));
@@ -135,5 +157,7 @@ mod tests {
         assert!(s.contains("/tmp/vk/run.timecodes.txt"));
         assert!(s.contains("core.ncnn.Model(clip, network_path=\"/models/2x_x_fp16.onnx\", num_streams=2, device_id=0, fp16=True)"));
         assert!(s.contains("format=vs.RGBH"));
+        assert!(!s.contains("core.cas.CAS"), "disabled step was rendered");
+        assert!(s.contains("left   = 0\n"));
     }
 }
