@@ -1,0 +1,11 @@
+name = "Side by Side"
+code = """
+# Full Docs: https://www.vapoursynth.com/doc/functions/video/stackvertical_stackhorizontal.html
+
+original_clip_resized = core.resize.Bilinear(original_clip, format=clip.format, width=clip.width, height=clip.height)
+clip = core.std.StackHorizontal([original_clip_resized, clip])"""
+category = [ "Utility", "Comparison" ]
+description = "Stacks the current clip next to the original clip."
+
+[metadata]
+createdAt = "2026-02-08T10:09:39.207Z"

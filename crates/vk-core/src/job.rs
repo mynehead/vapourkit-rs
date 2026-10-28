@@ -8,7 +8,7 @@ use std::sync::mpsc::Sender;
 use std::sync::{Arc, Mutex};
 use std::thread;
 
-use crate::script::{self, ScriptConfig};
+use crate::script;
 
 #[derive(Clone, Debug)]
 pub struct Tools {
@@ -44,11 +44,18 @@ impl Job {
 }
 
 /// `video_args` are the encoder arguments, e.g. from `Encoding::args`.
-pub fn start(tools: Tools, cfg: ScriptConfig, video_args: Vec<String>, output: PathBuf, tx: Sender<Event>) -> Job {
+/// Where a run's script is written; render it for this path (`script::render`).
+pub fn script_path() -> PathBuf {
+    std::env::temp_dir().join(format!("vapourkit-{}", std::process::id())).join("run.vpy")
+}
+
+/// Runs `script` (rendered for `script_path()`, possibly edited by hand);
+/// `input` is the source the audio and subtitles are copied from.
+pub fn start(tools: Tools, script: String, input: PathBuf, video_args: Vec<String>, output: PathBuf, tx: Sender<Event>) -> Job {
     let children = Arc::new(Mutex::new(Vec::new()));
     let job = Job { children: children.clone() };
     thread::spawn(move || {
-        let result = run(&tools, &cfg, &video_args, &output, &tx, &children);
+        let result = run(&tools, &script, &input, &video_args, &output, &tx, &children);
         let _ = tx.send(Event::Done(result));
     });
     job
@@ -94,17 +101,18 @@ fn forward_lines(r: impl Read + Send + 'static, tx: Sender<Event>, tag: &'static
 
 fn run(
     tools: &Tools,
-    cfg: &ScriptConfig,
+    script: &str,
+    input: &Path,
     video_args: &[String],
     output: &Path,
     tx: &Sender<Event>,
     children: &Mutex<Vec<Child>>,
 ) -> Result<(), String> {
-    let work_dir = std::env::temp_dir().join(format!("vapourkit-{}", std::process::id()));
-    std::fs::create_dir_all(&work_dir).map_err(|e| format!("Cannot create {}: {e}", work_dir.display()))?;
-    let script_path = work_dir.join("run.vpy");
+    let script_path = script_path();
+    let work_dir = script_path.parent().expect("script_path has a folder");
+    std::fs::create_dir_all(work_dir).map_err(|e| format!("Cannot create {}: {e}", work_dir.display()))?;
     std::fs::write(work_dir.join("vk_runtime.py"), script::RUNTIME_PY).map_err(|e| e.to_string())?;
-    std::fs::write(&script_path, script::render(cfg, &script_path)).map_err(|e| e.to_string())?;
+    std::fs::write(&script_path, script).map_err(|e| e.to_string())?;
     let _ = tx.send(Event::Log(format!("Script: {}", script_path.display())));
 
     // Evaluating the script once also surfaces Python errors before ffmpeg starts.
@@ -128,7 +136,7 @@ fn run(
     let pipe = vspipe.stdout.take().expect("piped");
     forward_lines(vspipe.stderr.take().expect("piped"), tx.clone(), "vspipe");
     let mut ffmpeg = match Command::new(&tools.ffmpeg)
-        .args(ffmpeg_args(&cfg.input, video_args, output))
+        .args(ffmpeg_args(input, video_args, output))
         .stdin(Stdio::from(pipe))
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())

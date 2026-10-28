@@ -1,0 +1,33 @@
+name = "Guided Color Fix"
+code = """
+# Matches the colour to the reference picked on the card, keeping the detail.
+
+model       = "2x_bndl_anicc"  # The shipped model, or a path to your own PACC V4 .onnx, .safetensors or .pth.
+fp16        = True
+num_streams = 1
+backend     = "auto"  # "tensorrt", "directml", "migraphx", or "auto" to use Vapourkit's global setting.
+
+reference   = {{stage:source_id}}
+
+
+import vs_guidedcolorfix
+backend = vk_backend(backend, fp16=fp16, num_streams=num_streams)
+clip = vs_guidedcolorfix.guided_color_fix(clip, reference, model=model, backend=backend)"""
+category = [ "Color Modification", "Restoration" ]
+description = "AI colour correction: matches the picture's colour to the source, a step you pick, or another release loaded as a side chain (Add filter → Load Video), while keeping its detail. Ships the 2x_bndl_anicc model (CC BY-NC-SA 4.0)."
+
+[variables.source_id]
+type = "string"
+default = ""
+hidden = true
+description = "What this matches against: a step or side chain id, or empty for the source before any filter. Set by the dropdown on the card."
+
+[editor]
+type = "stageSource"
+label = "Match the colour of"
+
+[editor.variables]
+source = "source_id"
+
+[metadata]
+createdAt = "2026-10-01T00:00:00.000Z"

@@ -6,3 +6,5 @@ license.workspace = true
 
 [dependencies]
 serde = { version = "1", features = ["derive"] }
+toml = "0.8"
+include_dir = "0.7"
