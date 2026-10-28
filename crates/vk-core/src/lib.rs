@@ -6,4 +6,5 @@ pub mod encoding;
 pub mod job;
 pub mod probe;
 pub mod script;
+pub mod setup;
 pub mod workflow;

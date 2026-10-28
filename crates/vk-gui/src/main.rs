@@ -12,6 +12,7 @@ use vk_core::encoding::{self, Codec, Encoding};
 use vk_core::job::{self, Event, Job, Tools};
 use vk_core::probe::{self, VideoInfo};
 use vk_core::script::{self, Backend, ScriptConfig};
+use vk_core::setup;
 use vk_core::workflow::{self, Workflow};
 
 fn main() -> eframe::Result {
@@ -25,6 +26,7 @@ fn main() -> eframe::Result {
         Box::new(|cc| {
             theme::apply(&cc.egui_ctx);
             let mut app = App::default();
+            app.show_setup = setup::installed_vspipe().is_none();
             if let Some(saved) = cc.storage.and_then(|s| eframe::get_value(s, eframe::APP_KEY)) {
                 app.saved = saved;
             }
@@ -37,6 +39,7 @@ fn main() -> eframe::Result {
     )
 }
 
+const TIP_SETUP: &str = "Install VapourSynth and the plugins Vapourkit needs, or add the plugin for another backend.";
 const TIP_VIDEO: &str = "The video to upscale. Its audio and subtitles are copied into the output unchanged.";
 const TIP_OUTPUT: &str = "Where the result is written. The file extension picks the container (.mkv, .mp4 or .mov).";
 const TIP_BACKEND: &str = "The engine that runs the AI models on your graphics card.\n\n\
@@ -93,6 +96,10 @@ struct App {
     status: String,
     log: Vec<String>,
     show_console: bool,
+    show_setup: bool,
+    /// A setup run: its output lines and, at the end, the vspipe it installed.
+    setup: Option<(Receiver<String>, Receiver<Result<PathBuf, String>>)>,
+    setup_status: String,
 }
 
 impl Default for App {
@@ -116,6 +123,9 @@ impl Default for App {
             status: String::new(),
             log: Vec::new(),
             show_console: false,
+            show_setup: false,
+            setup: None,
+            setup_status: String::new(),
         }
     }
 }
@@ -188,6 +198,7 @@ impl App {
                 }
             }
         }
+        self.poll_setup();
         let Some((_, rx)) = &self.running else { return };
         let events: Vec<Event> = rx.try_iter().collect();
         for ev in events {
@@ -206,6 +217,7 @@ impl App {
                         Err(e) => {
                             self.log.push(e.clone());
                             self.show_console = true;
+                            self.show_setup |= e.starts_with(job::MISSING_PLUGIN);
                             format!("Failed: {}", e.lines().next().unwrap_or_default())
                         }
                     };
@@ -334,6 +346,10 @@ impl App {
                     .on_hover_text(TIP_BACKEND);
                 ui.label(RichText::new("STREAMS").small().color(WEAK)).on_hover_text(TIP_STREAMS);
                 ui.add(egui::DragValue::new(&mut self.num_streams).range(1..=8)).on_hover_text(TIP_STREAMS);
+                ui.separator();
+                if ui.selectable_label(self.show_setup, "⬇ Setup").on_hover_text(TIP_SETUP).clicked() {
+                    self.show_setup = !self.show_setup;
+                }
             });
         });
     }
@@ -371,8 +387,14 @@ impl App {
                     .into_iter()
                     .filter_map(|(m, what)| m.then_some(what))
                     .collect();
-                let why = if busy { "A video is being processed".to_string() } else { format!("Pick {} first", missing.join(" and ")) };
-                if ui.add_enabled(missing.is_empty() && !busy, theme::primary("▶ Start processing")).on_disabled_hover_text(why).clicked() {
+                let why = if busy {
+                    "A video is being processed".to_string()
+                } else if self.setup.is_some() {
+                    "Setup is still running".to_string()
+                } else {
+                    format!("Pick {} first", missing.join(" and "))
+                };
+                if ui.add_enabled(missing.is_empty() && !busy && self.setup.is_none(), theme::primary("▶ Start processing")).on_disabled_hover_text(why).clicked() {
                     self.start();
                 }
                 if ui.selectable_label(self.show_console, ">_ Console").clicked() {
@@ -669,6 +691,76 @@ impl App {
             }
         });
     }
+
+    fn poll_setup(&mut self) {
+        let Some((lines, done)) = &self.setup else { return };
+        for l in lines.try_iter() {
+            self.setup_status = l.clone();
+            self.log.push(l);
+        }
+        if let Ok(r) = done.try_recv() {
+            self.setup_status = match r {
+                Ok(vspipe) => {
+                    self.tools.vspipe = vspipe;
+                    "Done. Vapourkit now uses this VapourSynth.".into()
+                }
+                Err(e) => {
+                    self.log.push(e.clone());
+                    format!("Failed: {e}")
+                }
+            };
+            self.setup = None;
+        }
+    }
+
+    fn setup_window(&mut self, ctx: &egui::Context) {
+        let mut open = self.show_setup;
+        egui::Window::new("Setup").open(&mut open).collapsible(false).resizable(false).default_width(480.0).show(ctx, |ui| {
+            ui.label(format!(
+                "Vapourkit runs on VapourSynth. Setup installs a private copy for Vapourkit alone: \
+                 {}, VapourSynth R79, the BestSource video reader and the plugin for the backend below.",
+                if cfg!(windows) { "Python 3.13" } else { "a Python environment" }
+            ));
+            ui.label(RichText::new(format!("Into {}", setup::env_dir().display())).small().color(WEAK));
+            ui.label(RichText::new("It downloads from python.org and PyPI: a few hundred MB for DirectML or NCNN, several GB for TensorRT. \
+                Run it again to add the plugin for another backend.").small().color(WEAK));
+            ui.add_space(4.0);
+            let running = self.setup.is_some();
+            ui.horizontal(|ui| {
+                theme::field_label(ui, "Backend");
+                ui.add_enabled_ui(!running, |ui| {
+                    egui::ComboBox::from_id_salt("setup_backend").selected_text(self.backend.label()).show_ui(ui, |ui| {
+                        for b in Backend::ALL {
+                            ui.selectable_value(&mut self.backend, b, b.label());
+                        }
+                    });
+                });
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    let label = if setup::installed_vspipe().is_some() { "Install plugin" } else { "Install" };
+                    if ui.add_enabled(!running && self.running.is_none(), theme::primary(label)).clicked() {
+                        let (line_tx, line_rx) = channel();
+                        let (done_tx, done_rx) = channel();
+                        let backend = self.backend;
+                        std::thread::spawn(move || {
+                            let _ = done_tx.send(setup::run(backend, &line_tx));
+                        });
+                        self.setup = Some((line_rx, done_rx));
+                    }
+                });
+            });
+            if running {
+                ui.horizontal(|ui| {
+                    ui.spinner();
+                    ui.add(egui::Label::new(&self.setup_status).truncate());
+                });
+            } else if !self.setup_status.is_empty() {
+                ui.add(egui::Label::new(&self.setup_status).wrap());
+            } else if let Some(p) = setup::installed_vspipe() {
+                ui.label(RichText::new(format!("Installed: {}", p.display())).small().color(ACCENT));
+            }
+        });
+        self.show_setup = open;
+    }
 }
 
 impl eframe::App for App {
@@ -713,8 +805,9 @@ impl eframe::App for App {
             });
         });
         self.show_console = open;
+        self.setup_window(ctx);
 
-        if busy || self.loading.is_some() {
+        if busy || self.loading.is_some() || self.setup.is_some() {
             ctx.request_repaint_after(std::time::Duration::from_millis(100));
         }
     }
