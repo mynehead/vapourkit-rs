@@ -2,6 +2,7 @@
 //! (NCNN, fp16; VK_VSPIPE / VK_FFMPEG override the tools on PATH).
 
 use std::sync::mpsc::channel;
+use vk_core::encoding::Encoding;
 use vk_core::job::{self, Event, Tools};
 use vk_core::script::{Backend, ScriptConfig};
 
@@ -16,7 +17,7 @@ fn main() {
     if let Ok(p) = std::env::var("VK_FFMPEG") { tools.ffmpeg = p.into(); }
     let cfg = ScriptConfig { input: input.into(), model: model.into(), backend: Backend::Ncnn, fp16: true, num_streams: 2 };
     let (tx, rx) = channel();
-    let _job = job::start(tools, cfg, output.into(), tx);
+    let _job = job::start(tools, cfg, Encoding::default().args(), output.into(), tx);
     for ev in rx {
         match ev {
             Event::Log(l) => eprintln!("{l}"),

@@ -43,11 +43,12 @@ impl Job {
     }
 }
 
-pub fn start(tools: Tools, cfg: ScriptConfig, output: PathBuf, tx: Sender<Event>) -> Job {
+/// `video_args` are the encoder arguments, e.g. from `Encoding::args`.
+pub fn start(tools: Tools, cfg: ScriptConfig, video_args: Vec<String>, output: PathBuf, tx: Sender<Event>) -> Job {
     let children = Arc::new(Mutex::new(Vec::new()));
     let job = Job { children: children.clone() };
     thread::spawn(move || {
-        let result = run(&tools, &cfg, &output, &tx, &children);
+        let result = run(&tools, &cfg, &video_args, &output, &tx, &children);
         let _ = tx.send(Event::Done(result));
     });
     job
@@ -62,7 +63,7 @@ fn parse_frames(info: &str) -> Option<u64> {
 
 /// ffmpeg's arguments: the Matroska stream from vspipe tagged BT.709 limited,
 /// audio and subtitles copied from the source, progress on stdout.
-fn ffmpeg_args(input: &Path, output: &Path) -> Vec<String> {
+fn ffmpeg_args(input: &Path, video_args: &[String], output: &Path) -> Vec<String> {
     let mut a: Vec<String> = [
         "-hide_banner", "-loglevel", "error", "-nostats", "-progress", "pipe:1",
         "-f", "matroska", "-color_range", "tv", "-colorspace", "bt709",
@@ -72,11 +73,11 @@ fn ffmpeg_args(input: &Path, output: &Path) -> Vec<String> {
     .to_vec();
     a.push("-i".into());
     a.push(input.to_string_lossy().into_owned());
-    // shortcut: fixed x264 CRF 18 encode; encoder presets arrive with settings (milestone 2).
-    for s in [
-        "-map", "0:v:0", "-map", "1:a?", "-c:a", "copy", "-map", "1:s?", "-c:s", "copy",
-        "-c:v", "libx264", "-crf", "18", "-preset", "medium", "-fps_mode:v:0", "passthrough", "-y",
-    ] {
+    for s in ["-map", "0:v:0", "-map", "1:a?", "-c:a", "copy", "-map", "1:s?", "-c:s", "copy"] {
+        a.push(s.into());
+    }
+    a.extend_from_slice(video_args);
+    for s in ["-fps_mode:v:0", "passthrough", "-y"] {
         a.push(s.into());
     }
     a.push(output.to_string_lossy().into_owned());
@@ -94,6 +95,7 @@ fn forward_lines(r: impl Read + Send + 'static, tx: Sender<Event>, tag: &'static
 fn run(
     tools: &Tools,
     cfg: &ScriptConfig,
+    video_args: &[String],
     output: &Path,
     tx: &Sender<Event>,
     children: &Mutex<Vec<Child>>,
@@ -126,7 +128,7 @@ fn run(
     let pipe = vspipe.stdout.take().expect("piped");
     forward_lines(vspipe.stderr.take().expect("piped"), tx.clone(), "vspipe");
     let mut ffmpeg = match Command::new(&tools.ffmpeg)
-        .args(ffmpeg_args(&cfg.input, output))
+        .args(ffmpeg_args(&cfg.input, video_args, output))
         .stdin(Stdio::from(pipe))
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
@@ -169,10 +171,11 @@ mod tests {
 
     #[test]
     fn ffmpeg_reads_pipe_then_source() {
-        let a = ffmpeg_args(Path::new("in.mkv"), Path::new("out.mp4"));
+        let a = ffmpeg_args(Path::new("in.mkv"), &["-c:v".into(), "libx265".into()], Path::new("out.mp4"));
         let first = a.iter().position(|s| s == "pipe:0").unwrap();
         let second = a.iter().position(|s| s == "in.mkv").unwrap();
-        assert!(first < second);
+        let codec = a.iter().position(|s| s == "libx265").unwrap();
+        assert!(first < second && second < codec);
         assert_eq!(a.last().unwrap(), "out.mp4");
     }
 }

@@ -2,7 +2,7 @@
 
 A native Rust port of [Vapourkit](https://github.com/Kim2091/vapourkit), the VapourSynth video upscaling app, without Electron. GUI is [egui](https://github.com/emilk/egui).
 
-Status: skeleton. You pick a video, an ONNX/engine model, a backend (TensorRT, DirectML or NCNN) and an output, and it runs `vspipe` into `ffmpeg` with a progress bar. VapourSynth, vs-mlrt, BestSource and ffmpeg must already be installed and on `PATH`; first-run setup comes later.
+Status: skeleton. You pick a video, an ONNX/engine model, a backend (TensorRT, DirectML or NCNN) and an output, set up the encode (H.264, H.265, AV1 or ProRes on CPU, NVENC, AMF or QSV, or your own ffmpeg arguments, saved as named presets), and it runs `vspipe` into `ffmpeg` with a progress bar. VapourSynth, vs-mlrt, BestSource and ffmpeg must already be installed and on `PATH`; first-run setup comes later.
 
 ```sh
 cargo run --release -p vk-gui            # the app
@@ -18,7 +18,7 @@ cargo run -p vk-core --example upscale -- in.mkv model.onnx out.mkv   # headless
 ## Roadmap
 
 1. ~~Skeleton: video + model → vspipe | ffmpeg with progress~~
-2. Settings, encoder presets, backend choice incl. MIGraphX
+2. ~~Encoding settings and saved presets~~ (MIGraphX still to do)
 3. First-run setup (Python venv, VapourSynth, plugins, models)
 4. Filter chains, `.vkfilter` / `.vkworkflow` templates
 5. Live preview and side-by-side compare
