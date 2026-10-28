@@ -718,12 +718,13 @@ impl App {
         egui::Window::new("Setup").open(&mut open).collapsible(false).resizable(false).default_width(480.0).show(ctx, |ui| {
             ui.label(format!(
                 "Vapourkit runs on VapourSynth. Setup installs a private copy for Vapourkit alone: \
-                 {}, VapourSynth R79, the BestSource video reader and the plugin for the backend below.",
+                 {}, VapourSynth R79 with the plugin for the backend below, and everything the shipped filters need: \
+                 the VapourSynth plugins and scripts, PyTorch and the RIFE and DPIR models.",
                 if cfg!(windows) { "Python 3.13" } else { "a Python environment" }
             ));
-            ui.label(RichText::new(format!("Into {}", setup::env_dir().display())).small().color(WEAK));
-            ui.label(RichText::new("It downloads from python.org and PyPI: a few hundred MB for DirectML or NCNN, several GB for TensorRT. \
-                Run it again to add the plugin for another backend.").small().color(WEAK));
+            ui.label(RichText::new(format!("Into {}", setup::data_dir().display())).small().color(WEAK));
+            ui.label(RichText::new("It downloads about 2 GB from python.org, PyPI and GitHub, and takes a while; with TensorRT \
+                (CUDA PyTorch and TensorRT) several GB more. Run it again to add the plugin for another backend.").small().color(WEAK));
             ui.add_space(4.0);
             let running = self.setup.is_some();
             ui.horizontal(|ui| {
@@ -736,7 +737,7 @@ impl App {
                     });
                 });
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    let label = if setup::installed_vspipe().is_some() { "Install plugin" } else { "Install" };
+                    let label = if setup::installed_vspipe().is_some() { "Install again" } else { "Install" };
                     if ui.add_enabled(!running && self.running.is_none(), theme::primary(label)).clicked() {
                         let (line_tx, line_rx) = channel();
                         let (done_tx, done_rx) = channel();

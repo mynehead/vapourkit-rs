@@ -82,18 +82,14 @@ fn template_path(p: &Path) -> String {
 fn backend_helper(cfg: &ScriptConfig, work_dir: &Path) -> String {
     let attrs = "\"tensorrt\": \"TRT\", \"directml\": \"ORT_DML\", \"ncnn\": \"NCNN_VK\", \"migraphx\": \"MIGX\"";
     let dir = py_path(work_dir);
-    let first_model = cfg.steps.iter().find_map(|s| match &s.kind {
-        StepKind::Model { path, .. } => path.parent(),
-        _ => None,
-    });
-    let models = py_path(first_model.unwrap_or(work_dir));
+    let models = py_path(&crate::setup::models_dir());
     format!(
         "VK_BACKEND = \"{id}\"\n\
          VK_BUILD_ENV = {{}}\n\
          import sys as _vk_sys\n\
          if {dir} not in _vk_sys.path:\n    _vk_sys.path.insert(0, {dir})\n\
          import vk_runtime\n\
-         from vk_runtime import vk_backend, vk_timed_output\n\
+         from vk_runtime import vk_backend, vk_migx_model, vk_paired_by_time, vk_reference_video, vk_open_video, vk_conform, vk_stage_missing, vk_interpolated_timing, vk_timed_output\n\
          vk_runtime.configure(VK_BACKEND, {{{attrs}}}, VK_BUILD_ENV, models_path={models}, trtexec_path=\"trtexec\")\n",
         id = cfg.backend.id(),
     )

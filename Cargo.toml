@@ -6,3 +6,9 @@ members = ["crates/vk-core", "crates/vk-gui"]
 version = "0.1.0"
 edition = "2021"
 license = "GPL-3.0-only"
+
+# Unpacking the setup archives (several hundred MB of LZMA) crawls unoptimised.
+[profile.dev.package.sevenz-rust2]
+opt-level = 3
+[profile.dev.package.lzma-rust2]
+opt-level = 3
