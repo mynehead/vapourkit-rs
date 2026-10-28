@@ -4,20 +4,29 @@
 use serde::{Deserialize, Serialize};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+// Aliases read settings saved before the names were lowercased.
 #[serde(rename_all = "lowercase")]
 pub enum Codec {
+    #[serde(alias = "H264")]
     H264,
+    #[serde(alias = "H265")]
     H265,
+    #[serde(alias = "Av1")]
     Av1,
+    #[serde(alias = "ProRes")]
     ProRes,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum Encoder {
+    #[serde(alias = "Software")]
     Software,
+    #[serde(alias = "Nvidia")]
     Nvidia,
+    #[serde(alias = "Amd")]
     Amd,
+    #[serde(alias = "Intel")]
     Intel,
 }
 

@@ -191,6 +191,12 @@ mod tests {
     }
 
     #[test]
+    fn reads_capitalized_encoding_names() {
+        let s: Simple = toml::from_str("codec = \"H265\"\nencoder = \"Nvidia\"\npreset = \"p7\"\nquality = 20").unwrap();
+        assert_eq!((s.codec, s.encoder), (Codec::H265, Encoder::Nvidia));
+    }
+
+    #[test]
     fn reads_upstream_layout() {
         let text = r#"
 [workflow]
