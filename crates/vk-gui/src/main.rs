@@ -26,7 +26,7 @@ fn main() -> eframe::Result {
         Box::new(|cc| {
             theme::apply(&cc.egui_ctx);
             let mut app = App::default();
-            app.show_setup = setup::installed_vspipe().is_none();
+            app.show_setup = !setup::is_current();
             if let Some(saved) = cc.storage.and_then(|s| eframe::get_value(s, eframe::APP_KEY)) {
                 app.saved = saved;
             }
@@ -756,6 +756,8 @@ impl App {
                 });
             } else if !self.setup_status.is_empty() {
                 ui.add(egui::Label::new(&self.setup_status).wrap());
+            } else if setup::installed_vspipe().is_some() && !setup::is_current() {
+                ui.label(RichText::new("Setup brings more than your installation has, for example the plugins the filters need. Click Install again.").color(ACCENT));
             } else if let Some(p) = setup::installed_vspipe() {
                 ui.label(RichText::new(format!("Installed: {}", p.display())).small().color(ACCENT));
             }

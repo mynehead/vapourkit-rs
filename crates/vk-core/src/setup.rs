@@ -134,6 +134,18 @@ pub fn installed_vspipe() -> Option<PathBuf> {
     Some(vspipe_in(&env_dir())).filter(|p| p.is_file())
 }
 
+/// Raised whenever setup installs more, so older installs are offered the update.
+const SETUP_VERSION: &str = "2";
+
+fn stamp() -> PathBuf {
+    data_dir().join("setup-version")
+}
+
+/// Whether the installed environment is what this version of setup installs.
+pub fn is_current() -> bool {
+    installed_vspipe().is_some() && std::fs::read_to_string(stamp()).is_ok_and(|v| v.trim() == SETUP_VERSION)
+}
+
 /// Installs everything, or tops it up with `backend`'s plugin; safe to run
 /// again. Each output line goes to `log`. Returns the vspipe to use.
 pub fn run(backend: Backend, log: &Sender<String>) -> Result<PathBuf, String> {
@@ -241,6 +253,7 @@ pub fn run(backend: Backend, log: &Sender<String>) -> Result<PathBuf, String> {
     if !vspipe.is_file() {
         return Err(format!("Setup finished but {} is missing.", vspipe.display()));
     }
+    let _ = std::fs::write(stamp(), SETUP_VERSION);
     say("Setup done.");
     Ok(vspipe)
 }
